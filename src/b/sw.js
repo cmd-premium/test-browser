@@ -18,10 +18,10 @@ function mountFromScopePath(p) {
 }
 /** '' for standalone Waves, e.g. '/waves' when embedded in NovaDesk */
 const __MOUNT = mountFromScopePath(scopePath);
-const SJ_PREFIX = `${__MOUNT}/b/s/`;
-const UV_PREFIX = `${__MOUNT}/b/u/hi/`;
+const SJ_PREFIX = __MOUNT + '/b/s/';
+const UV_PREFIX = __MOUNT + '/b/u/hi/';
 const STATIC_ASSET_REGEX = /\.(png|jpg|jpeg|gif|ico|webp|bmp|tiff|svg|mp3|wav|ogg|mp4|webm|woff|woff2|ttf|otf|eot)(\?.*)?$/i;
-const MOCHI_PREFIX = `${__MOUNT}/!!/`;
+const MOCHI_PREFIX = __MOUNT + '/!!/';
 const CACHE_VERSION = '__BUILD_ID__';
 const SHELL_CACHE = 'waves-shell-' + CACHE_VERSION;
 const RUNTIME_CACHE = 'waves-runtime-' + CACHE_VERSION;
@@ -438,14 +438,14 @@ self.addEventListener('message', (event) => {
 });
 
 if (isScramjet) {
-  importScripts(`${__MOUNT}/b/s/jetty.all.js`);
+  importScripts(__MOUNT + '/b/s/jetty.all.js');
   const { ScramjetServiceWorker } = $scramjetLoadWorker();
   scramjet = new ScramjetServiceWorker();
 } else if (isUltraviolet) {
   importScripts(
-    `${__MOUNT}/b/u/bunbun.js`,
-    `${__MOUNT}/b/u/concon.js`,
-    `${__MOUNT}/b/u/serser.js`
+    __MOUNT + '/b/u/bunbun.js',
+    __MOUNT + '/b/u/concon.js',
+    __MOUNT + '/b/u/serser.js'
   );
   uv = new UVServiceWorker();
 }
@@ -759,7 +759,7 @@ const META_SCRIPT = `
       absoluteUrl=rawUrl;
     }
 
-    if(absoluteUrl.startsWith(self.location.origin) && !absoluteUrl.includes(MOCHI_PREFIX) && !absoluteUrl.includes(SJ_PREFIX) && !absoluteUrl.includes(`${__MOUNT}/b/u/`)) {
+    if(absoluteUrl.startsWith(self.location.origin) && !absoluteUrl.includes(MOCHI_PREFIX) && !absoluteUrl.includes(SJ_PREFIX) && !absoluteUrl.includes(__MOUNT + '/b/u/')) {
       try{
         const baseReal = decodeProxiedUrl(window.location.href) || window.location.href;
         const realResolved = new URL(rawUrl, baseReal).href;
@@ -1113,7 +1113,7 @@ self.addEventListener("fetch", (event) => {
           scramjetConfigLoaded = true;
         }
 
-        if (url.pathname.startsWith(`${__MOUNT}/b/s/jetty.`) && !url.pathname.endsWith('.wasm')) {
+        if (url.pathname.startsWith(__MOUNT + '/b/s/jetty.') && !url.pathname.endsWith('.wasm')) {
           return fetch(request);
         }
 
@@ -1156,7 +1156,7 @@ self.addEventListener("fetch", (event) => {
           return new Response('offline', { status: 503 });
         }
 
-        if (CACHEABLE_STATIC_EXT.test(path) || path.startsWith(`${__MOUNT}/assets/`) || path.startsWith(`${__MOUNT}/bmux/`) || path.startsWith(`${__MOUNT}/epoxy/`) || path.startsWith(`${__MOUNT}/libcurl/`) || path.startsWith(`${__MOUNT}/s/`)) {
+        if (CACHEABLE_STATIC_EXT.test(path) || path.startsWith(__MOUNT + '/assets/') || path.startsWith(__MOUNT + '/bmux/') || path.startsWith(__MOUNT + '/epoxy/') || path.startsWith(__MOUNT + '/libcurl/') || path.startsWith(__MOUNT + '/s/')) {
           const cached = await caches.match(request);
           if (cached) return cached;
 

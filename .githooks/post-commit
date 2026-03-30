@@ -3,4 +3,9 @@ branch=$(git rev-parse --abbrev-ref HEAD)
 if [ "$branch" = "HEAD" ]; then
 	exit 0
 fi
-git push -u origin "$branch"
+if ! git push -u origin "$branch"; then
+	echo "" >&2
+	echo "Post-commit: git push failed (your commit is still saved locally)." >&2
+	echo "Common fixes: sign in to GitHub (HTTPS: Personal Access Token or Git Credential Manager), or run: git pull --rebase origin $branch && git push -u origin $branch" >&2
+	exit 1
+fi

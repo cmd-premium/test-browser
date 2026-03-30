@@ -6,7 +6,7 @@ import { createServer, request } from "http";
 import express from "express";
 import compression from "compression";
 import helmet from "helmet";
-import wisp from "wisp-server-node";
+import { server as wisp } from "@mercuryworkshop/wisp-js";
 import { LRUCache } from "lru-cache";
 import { baremuxPath } from "@mercuryworkshop/bare-mux/node";
 import { epoxyPath } from "@mercuryworkshop/epoxy-transport";

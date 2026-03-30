@@ -2,13 +2,15 @@ import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { Glob } from "bun";
-import { obfuscate } from 'javascript-obfuscator';
+import { createHash } from "node:crypto";
+import JavaScriptObfuscator from "javascript-obfuscator";
+const { obfuscate } = JavaScriptObfuscator;
 import postcss from "postcss";
 import autoprefixer from "autoprefixer";
 import cssnano from "cssnano";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
+import * as esbuild from "esbuild";
 
 const brotliCompress = promisify(zlib.brotliCompress);
 const gzip = promisify(zlib.gzip);
@@ -62,9 +64,41 @@ const CONFIG = {
 
 const normalizePath = (p) => p.split(path.sep).join('/');
 
+/** @param {string} rootDir */
+async function collectByExt(rootDir, ext) {
+    const out = [];
+    async function walk(d) {
+        const entries = await fs.readdir(d, { withFileTypes: true });
+        for (const e of entries) {
+            const full = path.join(d, e.name);
+            if (e.isDirectory()) await walk(full);
+            else if (e.name.endsWith(ext)) out.push(full);
+        }
+    }
+    await walk(rootDir);
+    return out;
+}
+
+const COMPRESS_EXT = new Set([".css", ".js", ".html", ".mjs"]);
+
+/** @param {string} rootDir */
+async function collectCompressible(rootDir) {
+    const out = [];
+    async function walk(d) {
+        const entries = await fs.readdir(d, { withFileTypes: true });
+        for (const e of entries) {
+            const full = path.join(d, e.name);
+            if (e.isDirectory()) await walk(full);
+            else if (COMPRESS_EXT.has(path.extname(e.name).toLowerCase())) out.push(full);
+        }
+    }
+    await walk(rootDir);
+    return out;
+}
+
 async function getFileHash(filePath) {
-    const buf = await Bun.file(filePath).arrayBuffer();
-    return new Bun.CryptoHasher("md5").update(buf).digest("hex").slice(0, 10);
+    const buf = await fs.readFile(filePath);
+    return createHash("md5").update(buf).digest("hex").slice(0, 10);
 }
 
 const tasks = {
@@ -79,11 +113,7 @@ const tasks = {
 
     async processCSS() {
         await fs.mkdir(CONFIG.dirs.cssDest, { recursive: true });
-        const glob = new Glob("**/*.css");
-        const cssFiles = [];
-        for await (const file of glob.scan({ cwd: CONFIG.dirs.cssSrc, absolute: true })) {
-            cssFiles.push(file);
-        }
+        let cssFiles = await collectByExt(CONFIG.dirs.cssSrc, ".css");
 
         if (cssFiles.length > 0) {
             cssFiles.sort((a, b) => {
@@ -92,9 +122,9 @@ const tasks = {
                 return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
             });
 
-            const contents = await Promise.all(cssFiles.map(f => Bun.file(f).text()));
+            const contents = await Promise.all(cssFiles.map(f => fs.readFile(f, "utf8")));
             const result = await postcss([autoprefixer(), cssnano()]).process(contents.join("\n"), { from: undefined });
-            await Bun.write(path.join(CONFIG.dirs.cssDest, "style.css"), result.css);
+            await fs.writeFile(path.join(CONFIG.dirs.cssDest, "style.css"), result.css);
         }
 
         const copyNonCss = async (src, dest) => {
@@ -122,24 +152,32 @@ const tasks = {
 
         const buildId = crypto.randomBytes(4).toString('hex');
 
-        const bunBuild = await Bun.build({
-            entrypoints: [path.join(CONFIG.dirs.src, 'assets/js/entry.js')],
+        const esResult = await esbuild.build({
+            absWorkingDir: process.cwd(),
+            entryPoints: [path.join(CONFIG.dirs.src, 'assets/js/entry.js')],
+            bundle: true,
             minify: true,
+            format: 'esm',
+            platform: 'browser',
+            write: false
         });
-        if (!bunBuild.success) throw new Error("bun build failed");
+        if (esResult.errors.length) {
+            console.error(esResult.errors);
+            throw new Error("esbuild bundle failed");
+        }
 
-        const appCode = (await bunBuild.outputs[0].text()).replace("__BUILD_ID__", buildId);
+        const appCode = esResult.outputFiles[0].text.replace("__BUILD_ID__", buildId);
         const serverIp = process.env.IP || "127.0.0.1";
         console.log(`${serverIp}`);
-        let swCode = (await Bun.file(path.join(CONFIG.dirs.swSrc, "sw.js")).text())
+        let swCode = (await fs.readFile(path.join(CONFIG.dirs.swSrc, "sw.js"), "utf8"))
             .replace("__SERVER_IP__", serverIp)
             .replace("__BUILD_ID__", buildId);
 
         const serserPath = path.join("public", "b", "u", "serser.js");
         if (existsSync(serserPath)) {
-            let serser = await Bun.file(serserPath).text();
+            let serser = await fs.readFile(serserPath, "utf8");
             serser = serser.replace(/__SERVER_IP__/g, serverIp);
-            await Bun.write(serserPath, serser);
+            await fs.writeFile(serserPath, serser);
         }
 
         const [appObf, swObf] = await Promise.all([
@@ -148,8 +186,8 @@ const tasks = {
         ]);
 
         await Promise.all([
-            Bun.write(path.join(CONFIG.dirs.jsDest, 'app.js'), appObf),
-            Bun.write(path.join(CONFIG.dirs.swDest, "sw.js"), swObf)
+            fs.writeFile(path.join(CONFIG.dirs.jsDest, 'app.js'), appObf),
+            fs.writeFile(path.join(CONFIG.dirs.swDest, "sw.js"), swObf)
         ]);
     }
 };
@@ -187,9 +225,9 @@ async function main() {
             manifest[htmlRef] = normalizePath(path.relative(CONFIG.dirs.dist, newFullPath));
         }
 
-        const htmlGlob = new Glob('**/*.html');
-        for await (const htmlFile of htmlGlob.scan({ cwd: CONFIG.dirs.dist, absolute: true })) {
-            let content = await Bun.file(htmlFile).text();
+        const htmlFiles = await collectByExt(CONFIG.dirs.dist, ".html");
+        for (const htmlFile of htmlFiles) {
+            let content = await fs.readFile(htmlFile, "utf8");
             if (!content.startsWith("\n")) content = "\n" + content;
 
             for (const [original, hashed] of Object.entries(manifest)) {
@@ -204,30 +242,30 @@ async function main() {
                 content = content.replace(new RegExp(`<script[^>]*src=["']/?${escaped}["'][^>]*>\\s*</script>\\s*\\n?`, 'gi'), '');
                 content = content.replace(new RegExp(`<link[^>]*href=["']/?${escaped}["'][^>]*>\\s*\\n?`, 'gi'), '');
             }
-            await Bun.write(htmlFile, content);
+            await fs.writeFile(htmlFile, content);
         }
 
         const appJsPath = path.join(CONFIG.dirs.dist, manifest['assets/js/index.js']);
         if (existsSync(appJsPath) && manifest['b/sw.js']) {
-            let appContent = await Bun.file(appJsPath).text();
+            let appContent = await fs.readFile(appJsPath, "utf8");
             const swHashed = manifest['b/sw.js'];
             appContent = appContent.replace(/(['"`])\.\/b\/sw\.js\1/g, `$1./${swHashed}$1`)
                 .replace(/(['"`])\/b\/sw\.js\1/g, `$1/${swHashed}$1`);
-            await Bun.write(appJsPath, appContent);
+            await fs.writeFile(appJsPath, appContent);
         }
 
-        const compressGlob = new Glob('**/*.{css,js,html,mjs}');
-        const compressJobs = [];
-        for await (const file of compressGlob.scan({ cwd: CONFIG.dirs.dist, absolute: true })) {
-            const content = await Bun.file(file).arrayBuffer();
-            const buf = Buffer.from(content);
-            compressJobs.push(
-                brotliCompress(buf, {
-                    params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 }
-                }).then(br => Bun.write(file + '.br', br)),
-                gzip(buf, { level: 9 }).then(gz => Bun.write(file + '.gz', gz))
-            );
-        }
+        const compressFiles = await collectCompressible(CONFIG.dirs.dist);
+        const compressJobs = compressFiles.map((file) =>
+            fs.readFile(file).then((content) => {
+                const buf = Buffer.from(content);
+                return Promise.all([
+                    brotliCompress(buf, {
+                        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11 }
+                    }).then(br => fs.writeFile(file + '.br', br)),
+                    gzip(buf, { level: 9 }).then(gz => fs.writeFile(file + '.gz', gz))
+                ]);
+            })
+        );
         await Promise.all(compressJobs);
 
         const duration = ((performance.now() - startTime) / 1000).toFixed(2);
